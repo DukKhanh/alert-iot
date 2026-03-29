@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  
+
+  <title>ESP32 — Hệ thống phát hiện âm thanh bất thường</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── Header ── -->
+<div class="header">
+  <div class="header-left">
+    <div class="esp-badge">ESP32 · GPIO34</div>
+    <h1>Hệ thống phát hiện âm thanh bất thường</h1>
+  </div>
+  <div class="header-status">
+    <span>
+      <span class="status-dot" id="connDot"></span>
+      <span id="connLabel">ĐANG KẾT NỐI</span>
+    </span>
+    <span id="clockDisplay" style="color:var(--text)"></span>
+  </div>
+</div>
+
+<!-- ── Main grid ── -->
+<div class="main">
+
+  <!-- Waveform panel -->
+  <div class="panel waveform-panel">
+    <div class="panel-label">Dạng sóng âm thanh thời gian thực</div>
+    <canvas id="waveCanvas"></canvas>
+    <div class="wave-stats">
+      <div class="stat-card">
+        <div class="stat-label">BIÊN ĐỘ</div>
+        <div class="stat-value" id="statAmplitude">0<span class="stat-unit">dB</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">TẦN SỐ CAO NHẤT</div>
+        <div class="stat-value" id="statFreq">--<span class="stat-unit">Hz</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">RMS</div>
+        <div class="stat-value" id="statRMS">0.00<span class="stat-unit">V</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">MẪU/GIÂY</div>
+        <div class="stat-value" id="statRate">44100<span class="stat-unit">Hz</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FFT panel -->
+  <div class="panel fft-panel">
+    <div class="panel-label">Phổ tần số (FFT)</div>
+    <canvas id="fftCanvas"></canvas>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <!-- Alert -->
+    <div class="alert-panel">
+      <div class="panel-label">Trạng thái cảnh báo</div>
+      <div class="alert-box normal" id="alertBox">
+        <div class="alert-status-row">
+          <div class="alert-icon normal" id="alertIcon">✓</div>
+          <div class="alert-title normal" id="alertTitle">BÌNH THƯỜNG</div>
+        </div>
+        <div class="alert-desc" id="alertDesc">Không phát hiện âm thanh bất thường</div>
+        <div class="alert-time" id="alertTime">--:--:--</div>
+      </div>
+    </div>
+
+    <!-- Detection -->
+    <div class="detection-panel">
+      <div class="panel-label">Nhận diện tín hiệu âm thanh</div>
+      <div id="soundTagsContainer">
+        <div class="sound-tag" id="tag0">
+          <span id="tagName0" style="min-width:90px">Môi trường</span>
+          <div class="tag-bar"><div class="tag-fill" id="tagFill0" style="width:0%"></div></div>
+          <span class="sound-confidence" id="tagConf0">0%</span>
+        </div>
+        <div class="sound-tag" id="tag1">
+          <span id="tagName1" style="min-width:90px">Tiếng người</span>
+          <div class="tag-bar"><div class="tag-fill" id="tagFill1" style="width:0%"></div></div>
+          <span class="sound-confidence" id="tagConf1">0%</span>
+        </div>
+        <div class="sound-tag" id="tag2">
+          <span id="tagName2" style="min-width:90px">Máy móc</span>
+          <div class="tag-bar"><div class="tag-fill" id="tagFill2" style="width:0%"></div></div>
+          <span class="sound-confidence" id="tagConf2">0%</span>
+        </div>
+        <div class="sound-tag" id="tag3">
+          <span id="tagName3" style="min-width:90px">Tiếng nổ/va đập</span>
+          <div class="tag-bar"><div class="tag-fill" id="tagFill3" style="width:0%"></div></div>
+          <span class="sound-confidence" id="tagConf3">0%</span>
+        </div>
+        <div class="sound-tag" id="tag4">
+          <span id="tagName4" style="min-width:90px">Báo động</span>
+          <div class="tag-bar"><div class="tag-fill" id="tagFill4" style="width:0%"></div></div>
+          <span class="sound-confidence" id="tagConf4">0%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Relay -->
+    <div class="relay-panel">
+      <div class="panel-label">Điều khiển relay / thiết bị</div>
+      <div class="relay-grid">
+        <div class="relay-item">
+          <div>
+            <div class="relay-name">Relay 1</div>
+            <div style="font-size:10px;color:var(--text2);font-family:var(--mono)">GPIO25</div>
+          </div>
+          <button class="relay-toggle on" id="relay1" onclick="toggleRelay(1)"></button>
+        </div>
+        <div class="relay-item">
+          <div>
+            <div class="relay-name">Relay 2</div>
+            <div style="font-size:10px;color:var(--text2);font-family:var(--mono)">GPIO26</div>
+          </div>
+          <button class="relay-toggle on" id="relay2" onclick="toggleRelay(2)"></button>
+        </div>
+        <div class="relay-item">
+          <div>
+            <div class="relay-name">Relay 3</div>
+            <div style="font-size:10px;color:var(--text2);font-family:var(--mono)">GPIO27</div>
+          </div>
+          <button class="relay-toggle off" id="relay3" onclick="toggleRelay(3)"></button>
+        </div>
+        <div class="relay-item">
+          <div>
+            <div class="relay-name">Auto-cut</div>
+            <div style="font-size:10px;color:var(--green);font-family:var(--mono)">AI MODE</div>
+          </div>
+          <button class="relay-toggle on" id="relay4" onclick="toggleRelay(4)"></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Log -->
+    <div class="log-panel">
+      <div class="panel-label">Nhật ký hệ thống</div>
+      <div class="log-box" id="logBox"></div>
+      <div class="control-bar">
+        <button class="btn primary" onclick="startSystem()">▶ BẮT ĐẦU</button>
+        <button class="btn" onclick="triggerAnomaly()">⚡ KÍCH HOẠT BẤT THƯỜNG</button>
+        <button class="btn" onclick="clearLog()">✕ Xóa log</button>
+      </div>
+    </div>
+
+  </div><!-- /sidebar -->
+</div><!-- /main -->
+
+<script src="https://cdn.socket.io/3.1.3/socket.io.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
