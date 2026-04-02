@@ -5,7 +5,6 @@ import librosa
 import time
 from collections import deque
 from tensorflow.keras.models import load_model
-
 from flask import Flask
 from flask_socketio import SocketIO
 import threading
@@ -44,13 +43,32 @@ LABELS = {
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+# Shared state cho latest spectrogram / waveform
+latest_spectrogram = {"data": [], "shape": [0, 0], "db_min": -80.0, "db_max": 0.0}
+latest_waveform = np.array([], dtype=np.float32)
+
 @app.route("/")
 def home():
     return "Server OK"
 
+@app.route("/api/spectrogram")
+def get_spectrogram():
+    """REST endpoint: trả về mel-spectrogram mới nhất dạng JSON."""
+    from flask import jsonify
+    return jsonify(latest_spectrogram)
+
+@app.route("/api/waveform")
+def get_waveform():
+    """REST endpoint: trả về waveform mới nhất."""
+    from flask import jsonify
+    return jsonify({"samples": latest_waveform.tolist() if len(latest_waveform) > 0 else []})
+
 @socketio.on('connect')
 def connect():
     print("Client connected!")
+    # Gửi ngay frame hiện tại cho client mới kết nối
+    if len(latest_spectrogram["data"]) > 0:
+        socketio.emit('spectrogram', latest_spectrogram)
 
 # =========================
 # LOAD MODEL
@@ -146,7 +164,31 @@ def model_predict(X):
 # =========================
 # UDP LOOP
 # =========================
+def compute_realtime_spectrogram(audio_np, sample_rate=16000, n_mels=128, n_fft=1024, hop_length=256):
+    """Tính mel-spectrogram từ audio buffer, trả về dict sẵn sàng emit."""
+    if len(audio_np) < n_fft:
+        return None
+    D = librosa.stft(audio_np, n_fft=n_fft, hop_length=hop_length, window='hann', center=False)
+    mel = librosa.feature.melspectrogram(S=np.abs(D) ** 2, sr=sample_rate, n_mels=n_mels)
+    log_mel = librosa.power_to_db(mel, ref=1.0)
+    db_min = float(log_mel.min())
+    db_max = float(log_mel.max())
+    # Normalize về [0, 1] để FE dễ render
+    if db_max > db_min:
+        norm = ((log_mel - db_min) / (db_max - db_min)).astype(np.float32)
+    else:
+        norm = np.zeros_like(log_mel, dtype=np.float32)
+    return {
+        "data": norm.tolist(),          # shape [n_mels, time_frames]
+        "shape": list(norm.shape),
+        "db_min": round(db_min, 2),
+        "db_max": round(db_max, 2)
+    }
+
+
 def udp_loop():
+    global latest_spectrogram, latest_waveform
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((UDP_IP, UDP_PORT))
     print("Listening UDP...")
@@ -156,6 +198,7 @@ def udp_loop():
 
     last_predict_time = 0
     last_alert_time = 0
+    last_spec_time = 0
     pred_history = []
 
     while True:
@@ -167,7 +210,18 @@ def udp_loop():
 
         # ===== SEND WAVEFORM TO UI =====
         wave_frame = np.array(audio_buffer)[-1024:]  # 1024 mẫu cuối
+        latest_waveform = wave_frame
         socketio.emit('waveform', {'samples': wave_frame.tolist()})
+
+        # ===== SEND SPECTROGRAM REALTIME (mỗi 200ms) =====
+        current_time = time.time()
+        if current_time - last_spec_time >= 0.2 and len(audio_buffer) >= 1024:
+            last_spec_time = current_time
+            spec_audio = np.array(audio_buffer)[-SAMPLE_RATE:]  # 1 giây gần nhất
+            spec_data = compute_realtime_spectrogram(spec_audio)
+            if spec_data:
+                latest_spectrogram = spec_data
+                socketio.emit('spectrogram', spec_data)
 
         current_time = time.time()
         if len(audio_buffer) >= BUFFER_SIZE and (current_time - last_predict_time > PREDICT_INTERVAL):

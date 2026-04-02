@@ -59,6 +59,19 @@
     <canvas id="fftCanvas"></canvas>
   </div>
 
+  <!-- Spectrogram panel -->
+  <div class="panel spectrogram-panel">
+    <div class="panel-label">Mel-Spectrogram thời gian thực
+      <span style="font-size:10px;color:var(--text2);margin-left:8px">128 mel bands · cập nhật 200ms</span>
+    </div>
+    <canvas id="specCanvas"></canvas>
+    <div class="spec-scale">
+      <span id="specDbMin">-80 dB</span>
+      <span style="color:var(--text2);font-size:10px">năng lượng</span>
+      <span id="specDbMax">0 dB</span>
+    </div>
+  </div>
+
   <!-- Sidebar -->
   <div class="sidebar">
 
@@ -80,67 +93,28 @@
       <div class="panel-label">Nhận diện tín hiệu âm thanh</div>
       <div id="soundTagsContainer">
         <div class="sound-tag" id="tag0">
-          <span id="tagName0" style="min-width:90px">Môi trường</span>
+          <span id="tagName0" style="min-width:90px">Background</span>
           <div class="tag-bar"><div class="tag-fill" id="tagFill0" style="width:0%"></div></div>
           <span class="sound-confidence" id="tagConf0">0%</span>
         </div>
         <div class="sound-tag" id="tag1">
-          <span id="tagName1" style="min-width:90px">Tiếng người</span>
+          <span id="tagName1" style="min-width:90px">Glass Breaking</span>
           <div class="tag-bar"><div class="tag-fill" id="tagFill1" style="width:0%"></div></div>
           <span class="sound-confidence" id="tagConf1">0%</span>
         </div>
         <div class="sound-tag" id="tag2">
-          <span id="tagName2" style="min-width:90px">Máy móc</span>
+          <span id="tagName2" style="min-width:90px">Gunshot</span>
           <div class="tag-bar"><div class="tag-fill" id="tagFill2" style="width:0%"></div></div>
           <span class="sound-confidence" id="tagConf2">0%</span>
         </div>
         <div class="sound-tag" id="tag3">
-          <span id="tagName3" style="min-width:90px">Tiếng nổ/va đập</span>
+          <span id="tagName3" style="min-width:90px">Scream</span>
           <div class="tag-bar"><div class="tag-fill" id="tagFill3" style="width:0%"></div></div>
           <span class="sound-confidence" id="tagConf3">0%</span>
-        </div>
-        <div class="sound-tag" id="tag4">
-          <span id="tagName4" style="min-width:90px">Báo động</span>
-          <div class="tag-bar"><div class="tag-fill" id="tagFill4" style="width:0%"></div></div>
-          <span class="sound-confidence" id="tagConf4">0%</span>
         </div>
       </div>
     </div>
 
-    <!-- Relay -->
-    <div class="relay-panel">
-      <div class="panel-label">Điều khiển relay / thiết bị</div>
-      <div class="relay-grid">
-        <div class="relay-item">
-          <div>
-            <div class="relay-name">Relay 1</div>
-            <div style="font-size:10px;color:var(--text2);font-family:var(--mono)">GPIO25</div>
-          </div>
-          <button class="relay-toggle on" id="relay1" onclick="toggleRelay(1)"></button>
-        </div>
-        <div class="relay-item">
-          <div>
-            <div class="relay-name">Relay 2</div>
-            <div style="font-size:10px;color:var(--text2);font-family:var(--mono)">GPIO26</div>
-          </div>
-          <button class="relay-toggle on" id="relay2" onclick="toggleRelay(2)"></button>
-        </div>
-        <div class="relay-item">
-          <div>
-            <div class="relay-name">Relay 3</div>
-            <div style="font-size:10px;color:var(--text2);font-family:var(--mono)">GPIO27</div>
-          </div>
-          <button class="relay-toggle off" id="relay3" onclick="toggleRelay(3)"></button>
-        </div>
-        <div class="relay-item">
-          <div>
-            <div class="relay-name">Auto-cut</div>
-            <div style="font-size:10px;color:var(--green);font-family:var(--mono)">AI MODE</div>
-          </div>
-          <button class="relay-toggle on" id="relay4" onclick="toggleRelay(4)"></button>
-        </div>
-      </div>
-    </div>
 
     <!-- Log -->
     <div class="log-panel">

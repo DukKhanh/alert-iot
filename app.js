@@ -1,8 +1,10 @@
 // ── Canvas Setup ──
 const waveCanvas = document.getElementById('waveCanvas');
 const fftCanvas  = document.getElementById('fftCanvas');
+const specCanvas = document.getElementById('specCanvas');
 const wCtx = waveCanvas.getContext('2d');
 const fCtx  = fftCanvas.getContext('2d');
+const sCtx  = specCanvas.getContext('2d');
 
 const COLORS = {
   bg: '#0a0c10', bg2: '#0d1014', bg3: '#11141a',
@@ -10,18 +12,17 @@ const COLORS = {
   yellow: '#ffd94a', cyan: '#00d4ff', text2: '#6b7a94', blue: '#3d9bff'
 };
 
-const SOUND_LABELS = ['Môi trường', 'Tiếng người', 'Máy móc', 'Tiếng nổ/va đập', 'Báo động'];
-const ANOMALY_LABELS = ['Tiếng nổ/va đập', 'Báo động'];
+const SOUND_LABELS = ['Background', 'Glass Breaking', 'Gunshot', 'Scream'];
+const ANOMALY_LABELS = ['Glass Breaking', 'Gunshot', 'Scream'];
 
 // ── State ──
-let waveData = new Float32Array(512).fill(0);
+let waveData = new Float32Array(1024).fill(0);
 let fftData  = new Float32Array(64).fill(0);
-let simActive    = false;
-let anomalyMode  = false;
-let anomalyTimer = 0;
-let frameCount   = 0;
-let anomalyTypeIdx = 3;
-let relayStates  = { 1: true, 2: true, 3: false, 4: true };
+let spectrogramData = null;   // { data: [[...]], shape: [n_mels, t], db_min, db_max }
+let serverWaveReady = false;
+
+
+
 
 // ── Canvas resize ──
 function resizeCanvases() {
@@ -29,6 +30,8 @@ function resizeCanvases() {
   waveCanvas.height = waveCanvas.offsetHeight;
   fftCanvas.width   = fftCanvas.offsetWidth;
   fftCanvas.height  = fftCanvas.offsetHeight;
+  specCanvas.width  = specCanvas.offsetWidth;
+  specCanvas.height = specCanvas.offsetHeight;
 }
 window.addEventListener('resize', resizeCanvases);
 
@@ -62,15 +65,6 @@ function clearLog() {
   renderLog();
 }
 
-// ── Relay toggle ──
-function toggleRelay(n) {
-  relayStates[n] = !relayStates[n];
-  const btn = document.getElementById('relay' + n);
-  btn.classList.toggle('on',  relayStates[n]);
-  btn.classList.toggle('off', !relayStates[n]);
-  addLog(`Relay ${n} (GPIO${24 + n}): ${relayStates[n] ? 'BẬT' : 'TẮT'}`,
-         relayStates[n] ? 'ok' : 'warn');
-}
 
 // ── Alert UI ──
 function setAlert(level, title, desc) {
@@ -119,22 +113,18 @@ function drawWaveform() {
   wCtx.fillStyle = COLORS.bg;
   wCtx.fillRect(0, 0, W, H);
 
-  // Grid vertical
   wCtx.strokeStyle = COLORS.grid;
   wCtx.lineWidth = 0.5;
   for (let x = 0; x < W; x += W / 8) {
     wCtx.beginPath(); wCtx.moveTo(x, 0); wCtx.lineTo(x, H); wCtx.stroke();
   }
-  // Grid horizontal
   for (let y = 0; y < H; y += H / 4) {
     wCtx.beginPath(); wCtx.moveTo(0, y); wCtx.lineTo(W, y); wCtx.stroke();
   }
-  // Center line
   wCtx.strokeStyle = '#1f2635';
   wCtx.lineWidth = 1;
   wCtx.beginPath(); wCtx.moveTo(0, H / 2); wCtx.lineTo(W, H / 2); wCtx.stroke();
 
-  // Waveform line
   const color = anomalyMode ? COLORS.red : COLORS.green;
   wCtx.strokeStyle   = color;
   wCtx.lineWidth     = 1.5;
@@ -157,14 +147,12 @@ function drawFFT() {
   fCtx.fillStyle = COLORS.bg;
   fCtx.fillRect(0, 0, W, H);
 
-  // Grid
   fCtx.strokeStyle = COLORS.grid;
   fCtx.lineWidth = 0.5;
   for (let y = 0; y < H; y += H / 4) {
     fCtx.beginPath(); fCtx.moveTo(0, y); fCtx.lineTo(W, y); fCtx.stroke();
   }
 
-  // Bars
   const bars = fftData.length;
   const bw = W / bars;
   for (let i = 0; i < bars; i++) {
@@ -176,7 +164,6 @@ function drawFFT() {
     fCtx.fillRect(i * bw + 1, H - h, bw - 2, h);
   }
 
-  // Freq labels
   fCtx.fillStyle = COLORS.text2;
   fCtx.font = '9px Share Tech Mono, monospace';
   const freqLabels = ['0', '1k', '2k', '4k', '8k', '12k', '16k', '20k'];
@@ -185,42 +172,68 @@ function drawFFT() {
   });
 }
 
-// ── Generate normal signal ──
-function generateNormalWave() {
-  const phase = frameCount * 0.04;
-  for (let i = 0; i < waveData.length; i++) {
-    const t = i / waveData.length;
-    waveData[i] = (
-      Math.sin(2 * Math.PI * t * 3 + phase) * 0.08 +
-      Math.sin(2 * Math.PI * t * 7 + phase * 1.3) * 0.04 +
-      (Math.random() - 0.5) * 0.06
-    );
+// ── Draw Mel-Spectrogram ──
+// data: mảng 2D [n_mels][time], giá trị [0,1] đã normalize
+function drawSpectrogram() {
+  const W = specCanvas.width, H = specCanvas.height;
+  if (!spectrogramData || !spectrogramData.data.length) {
+    sCtx.fillStyle = COLORS.bg;
+    sCtx.fillRect(0, 0, W, H);
+    sCtx.fillStyle = COLORS.text2;
+    sCtx.font = '11px Share Tech Mono, monospace';
+    sCtx.fillText('Chờ dữ liệu spectrogram...', W / 2 - 90, H / 2);
+    return;
   }
-  for (let i = 0; i < fftData.length; i++) {
-    const target = i < 10 ? 0.15 + Math.random() * 0.1
-                 : i < 20 ? 0.08 + Math.random() * 0.06
-                 :           0.02 + Math.random() * 0.03;
-    fftData[i] += (target - fftData[i]) * 0.2;
+
+  const melBands = spectrogramData.shape[0];   // 128
+  const timeCols = spectrogramData.shape[1];
+  const cellW = W / timeCols;
+  const cellH = H / melBands;
+
+  for (let t = 0; t < timeCols; t++) {
+    for (let m = 0; m < melBands; m++) {
+      const val = spectrogramData.data[m][t];  // [0,1]
+      // Viridis-like colormap: thấp=tím, cao=vàng
+      const r = Math.round(Math.min(255, val * 2.5 * 255));
+      const g = Math.round(Math.min(255, Math.max(0, (val - 0.3) * 2 * 255)));
+      const b = Math.round(Math.max(0, (1 - val * 1.5) * 255));
+      sCtx.fillStyle = `rgb(${r},${g},${b})`;
+      // mel band 0 = thấp nhất → vẽ từ dưới lên
+      sCtx.fillRect(
+        Math.floor(t * cellW),
+        Math.floor((melBands - 1 - m) * cellH),
+        Math.ceil(cellW) + 1,
+        Math.ceil(cellH) + 1
+      );
+    }
   }
+
+  // Trục tần số (mel bands)
+  sCtx.fillStyle = 'rgba(0,0,0,0.5)';
+  sCtx.fillRect(0, 0, 36, H);
+  sCtx.fillStyle = COLORS.text2;
+  sCtx.font = '9px Share Tech Mono, monospace';
+  const freqTicks = ['8k', '4k', '2k', '1k', '500', '250', '0'];
+  freqTicks.forEach((l, i) => {
+    const y = (i / (freqTicks.length - 1)) * H;
+    sCtx.fillText(l, 2, y + 4);
+  });
 }
 
-// ── Generate anomaly signal ──
-function generateAnomalyWave() {
-  const burst = Math.sin(frameCount * 0.3) * 0.5 + 0.5;
-  for (let i = 0; i < waveData.length; i++) {
-    const t = i / waveData.length;
-    waveData[i] = (
-      Math.sin(2 * Math.PI * t * 12 + frameCount * 0.2) * 0.35 * burst +
-      Math.sin(2 * Math.PI * t * 5  + frameCount * 0.5) * 0.25 +
-      (Math.random() - 0.5) * 0.3 * burst
-    );
-  }
-  for (let i = 0; i < fftData.length; i++) {
-    const anomalyBand = i > 20 && i < 45;
-    const target = anomalyBand
-      ? 0.5 + Math.random() * 0.4
-      : 0.1 + Math.random() * 0.15;
-    fftData[i] += (target - fftData[i]) * 0.3;
+// ── Tính FFT đơn giản từ waveform thật ──
+// Server gửi samples thô (float), ta tính năng lượng theo dải tần (band energy)
+function computeFFTFromWave() {
+  const N = waveData.length;
+  for (let b = 0; b < fftData.length; b++) {
+    const start = Math.floor(b * N / fftData.length);
+    const end   = Math.floor((b + 1) * N / fftData.length);
+    let energy = 0;
+    for (let i = start; i < end; i++) {
+      energy += waveData[i] * waveData[i];
+    }
+    const rms = Math.sqrt(energy / Math.max(end - start, 1));
+    // Smooth để tránh nhấp nháy
+    fftData[b] += (Math.min(rms * 5, 1.0) - fftData[b]) * 0.3;
   }
 }
 
@@ -229,7 +242,7 @@ function updateStats() {
   const maxAmp = Math.max(...Array.from(waveData).map(Math.abs));
   const db  = Math.round(20 * Math.log10(maxAmp + 0.001));
   const rms = Math.sqrt(waveData.reduce((a, v) => a + v * v, 0) / waveData.length);
-  const maxIdx = fftData.indexOf(Math.max(...fftData));
+  const maxIdx = Array.from(fftData).indexOf(Math.max(...fftData));
   const freq = Math.round((maxIdx / fftData.length) * 20000);
 
   document.getElementById('statAmplitude').innerHTML = db + '<span class="stat-unit">dB</span>';
@@ -237,76 +250,23 @@ function updateStats() {
   document.getElementById('statRMS').innerHTML       = rms.toFixed(3) + '<span class="stat-unit">V</span>';
 }
 
-// ── Trigger anomaly (called from HTML or externally) ──
-function triggerAnomaly() {
-  if (!simActive) {
-    addLog('⚠ Khởi động mô phỏng trước khi kích hoạt bất thường', 'warn');
-    return;
-  }
-  anomalyMode    = true;
-  anomalyTimer   = 120;
-  anomalyTypeIdx = Math.random() > 0.5 ? 3 : 4;
-
-  const label = SOUND_LABELS[anomalyTypeIdx];
-  const level = anomalyTypeIdx === 4 ? 'danger' : 'warning';
-
-  setAlert(level,
-    anomalyTypeIdx === 4 ? 'NGUY HIỂM' : 'CẢNH BÁO',
-    `Phát hiện: ${label}`
-  );
-  addLog(`[AI] Phát hiện âm thanh bất thường: "${label}"`, 'err');
-
-  if (relayStates[4]) {
-    setTimeout(() => {
-      relayStates[1] = false;
-      document.getElementById('relay1').classList.replace('on', 'off');
-      addLog('[AI] Auto-cut: Relay 1 → TẮT (bảo vệ thiết bị)', 'warn');
-    }, 600);
-  }
-}
-
 // ── Main render loop ──
+// Không còn generate random — chỉ draw những gì server gửi
 function gameLoop() {
   if (!simActive) { requestAnimationFrame(gameLoop); return; }
 
   frameCount++;
 
-  // if (anomalyTimer > 0) {
-  //   anomalyTimer--;
-  //   // generateAnomalyWave();
-
-  //   const confs = [0.04, 0.03, 0.05, 0, 0];
-  //   confs[anomalyTypeIdx] = 0.75 + Math.random() * 0.2;
-  //   const rest = 1 - confs[anomalyTypeIdx];
-  //   [0, 1, 2]
-  //     .filter(i => i !== anomalyTypeIdx && i < 3)
-  //     .forEach((i, j) => { confs[i] = rest * [0.5, 0.3, 0.2][j]; });
-  //   updateSoundTags(confs, anomalyTypeIdx);
-
-  // } else {
-  //   if (anomalyMode) {
-  //     anomalyMode = false;
-  //     setAlert('normal', 'BÌNH THƯỜNG', 'Không phát hiện âm thanh bất thường');
-  //     addLog('[AI] Trạng thái: Trở về bình thường', 'ok');
-  //     relayStates[1] = true;
-  //     document.getElementById('relay1').classList.replace('off', 'on');
-  //     addLog('[AI] Auto-restore: Relay 1 → BẬT', 'ok');
-  //     updateSoundTags([0.85, 0.05, 0.05, 0.03, 0.02], -1);
-  //   }
-  //   // generateNormalWave();
-
-  //   if (frameCount % 80 === 0) {
-  //     if (Math.random() < 0.3) {
-  //       updateSoundTags([0.60, 0.25, 0.10, 0.03, 0.02], 1);
-  //     } else {
-  //       updateSoundTags([0.85, 0.05, 0.05, 0.03, 0.02], 0);
-  //     }
-  //   }
-  // }
+  // Chờ frame đầu tiên từ server trước khi vẽ
+  if (!serverWaveReady) {
+    requestAnimationFrame(gameLoop);
+    return;
+  }
 
   if (frameCount % 3 === 0) updateStats();
   drawWaveform();
   drawFFT();
+  drawSpectrogram();
 
   requestAnimationFrame(gameLoop);
 }
@@ -321,11 +281,10 @@ function startSimulation() {
   document.getElementById('connLabel').textContent      = 'ĐÃ KẾT NỐI';
 
   addLog('[SYS] Kết nối ESP32 thành công — SSID: ESP32_AUDIO_01', 'ok');
-  addLog('[SYS] Mẫu âm thanh: 44100Hz / 16-bit / Mono', 'ok');
-  addLog('[AI]  Mô hình: SoundNet-Lite v2.1 (nạp vào SPIFFS)', 'ok');
+  addLog('[SYS] Mẫu âm thanh: 16000Hz / 32-bit / Mono', 'ok');
+  addLog('[AI]  Mô hình: spectrogram_model_best.keras', 'ok');
   addLog('[SYS] Bắt đầu thu âm thanh...', 'ok');
 
-  updateSoundTags([0.85, 0.05, 0.05, 0.03, 0.02], 0);
   setAlert('normal', 'BÌNH THƯỜNG', 'Hệ thống đang giám sát');
   requestAnimationFrame(gameLoop);
 }
@@ -340,7 +299,7 @@ document.getElementById('connDot').style.boxShadow  = '0 0 6px ' + COLORS.yellow
 requestAnimationFrame(gameLoop);
 
 // =============================
-// REAL-TIME FROM PYTHON (ADD)
+// REAL-TIME TỪ PYTHON SERVER
 // =============================
 const socket = io('http://192.168.1.17:5000');
 
@@ -354,19 +313,42 @@ socket.on('connect', () => {
   addLog('[SYS] Kết nối AI server thành công', 'ok');
 });
 
+socket.on('disconnect', () => {
+  document.getElementById('connDot').style.background = COLORS.yellow;
+  document.getElementById('connDot').style.boxShadow  = '0 0 6px ' + COLORS.yellow;
+  document.getElementById('connLabel').textContent = 'MẤT KẾT NỐI';
+  addLog('[SYS] Mất kết nối AI server', 'warn');
+  serverWaveReady = false;
+});
+
+// Nhận waveform thật từ server (thay thế generateNormalWave / generateAnomalyWave)
+socket.on('waveform', (data) => {
+  waveData = new Float32Array(data.samples);
+  computeFFTFromWave();
+  serverWaveReady = true;
+  if (!simActive) startSimulation();
+});
+
+// Nhận mel-spectrogram realtime từ server (emit mỗi 200ms)
+socket.on('spectrogram', (data) => {
+  spectrogramData = data;
+  document.getElementById('specDbMin').textContent = data.db_min + ' dB';
+  document.getElementById('specDbMax').textContent = data.db_max + ' dB';
+});
+
+// Nhận kết quả phân loại — server quyết định anomalyMode và UI
 socket.on('audio_event', (data) => {
   const { label, class_id, confidence, confs } = data;
 
-  // cập nhật thanh %
   updateSoundTags(confs, class_id);
 
-  // cảnh báo
   if (confidence > 0.5 && class_id !== 0) {
     const level = (class_id === 3) ? 'danger' : 'warning';
-
+    anomalyMode = true;
     setAlert(level, 'CẢNH BÁO', `Phát hiện: ${label}`);
     addLog(`[AI] ${label} (${(confidence * 100).toFixed(1)}%)`, 'err');
   } else {
+    anomalyMode = false;
     setAlert('normal', 'BÌNH THƯỜNG', 'Không phát hiện bất thường');
   }
 });
@@ -374,4 +356,3 @@ socket.on('audio_event', (data) => {
 function startSystem() {
   addLog('[SYS] Bắt đầu hệ thống AI...', 'ok');
 }
-
