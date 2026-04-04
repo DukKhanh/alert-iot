@@ -21,7 +21,10 @@ let fftData  = new Float32Array(64).fill(0);
 let spectrogramData = null;   // { data: [[...]], shape: [n_mels, t], db_min, db_max }
 let serverWaveReady = false;
 
-
+// BỔ SUNG THÊM 3 DÒNG NÀY:
+let simActive = false;
+let anomalyMode = false;
+let frameCount = 0;
 
 
 // ── Canvas resize ──
@@ -301,7 +304,7 @@ requestAnimationFrame(gameLoop);
 // =============================
 // REAL-TIME TỪ PYTHON SERVER
 // =============================
-const socket = io('http://192.168.1.17:5000');
+const socket = io('http://192.168.1.35:5000');
 
 socket.on('connect', () => {
   console.log("Connected to AI server");

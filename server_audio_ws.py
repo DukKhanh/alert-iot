@@ -15,7 +15,6 @@ import threading
 UDP_IP = "0.0.0.0"
 UDP_PORT = 8888
 
-ESP32_IP = "192.168.137.160"
 ESP32_PORT = 9999
 
 SAMPLE_RATE = 16000
@@ -201,10 +200,21 @@ def udp_loop():
     last_spec_time = 0
     pred_history = []
 
+    # Thêm biến này để tự động lấy IP của ESP32
+    current_esp32_ip = None
     while True:
-        data, _ = sock.recvfrom(4096)
+        data, addr = sock.recvfrom(4096)
+        
+        # BƯỚC MỚI: Xử lý dò tìm IP (Handshake)
+        if data == b"DISCOVER":
+            print(f"[*] Nhận yêu cầu kết nối từ ESP32 tại IP: {addr[0]}")
+            sock.sendto(b"SERVER_HERE", (addr[0], ESP32_PORT))
+            continue # Bỏ qua vòng lặp này vì đây không phải là data âm thanh
+
+        # THÊM 1 DÒNG NÀY ĐỂ LƯU IP ESP32:
+        current_esp32_ip = addr[0]
         audio_chunk = np.frombuffer(data, dtype=np.int32)
-        audio_chunk = audio_chunk >> 8
+        # audio_chunk = audio_chunk >> 8
         audio_chunk = audio_chunk.astype(np.float32) / (2**23)
         audio_buffer.extend(audio_chunk)
 
@@ -247,12 +257,13 @@ def udp_loop():
 
             # ===== ALERT TO ESP32 =====
             current_state = 1 if (label != "Background" and avg_prob > ALERT_THRESHOLD) else 0
-            if current_state == 1 and (current_time - last_alert_time > ALERT_COOLDOWN):
-                print("\n🚨 ALERT:", label.upper(), "Confidence:", round(avg_prob, 3))
-                sock.sendto(bytes([1]), (ESP32_IP, ESP32_PORT))
-                last_alert_time = current_time
-            elif current_state == 0:
-                sock.sendto(bytes([0]), (ESP32_IP, ESP32_PORT))
+            if current_esp32_ip is not None:
+                if current_state == 1 and (current_time - last_alert_time > ALERT_COOLDOWN):
+                    print("\n🚨 ALERT:", label.upper(), "Confidence:", round(avg_prob, 3))
+                    sock.sendto(bytes([1]), (current_esp32_ip, ESP32_PORT))
+                    last_alert_time = current_time
+                elif current_state == 0:
+                    sock.sendto(bytes([0]), (current_esp32_ip, ESP32_PORT))
 
 # =========================
 # START SERVER
